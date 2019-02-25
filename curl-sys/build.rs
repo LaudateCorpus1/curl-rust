@@ -19,28 +19,6 @@ fn main() {
         return println!("cargo:rustc-flags=-l curl");
     }
 
-    // If the static-curl feature is disabled, probe for a system-wide libcurl.
-    if !cfg!(feature = "static-curl") {
-        // OSX and Haiku ships libcurl by default, so we just use that version
-        // so long as it has the right features enabled.
-        if target.contains("apple") || target.contains("haiku") {
-            if !cfg!(feature = "http2") || curl_config_reports_http2() {
-                return println!("cargo:rustc-flags=-l curl");
-            }
-        }
-
-        // Next, fall back and try to use pkg-config if its available.
-        if windows {
-            if try_vcpkg() {
-                return
-            }
-        } else {
-            if try_pkg_config() {
-                return
-            }
-        }
-    }
-
     if !Path::new("curl/.git").exists() {
         let _ = Command::new("git").args(&["submodule", "update", "--init"])
                                    .status();
@@ -174,24 +152,8 @@ fn main() {
 
         .warnings(false);
 
-    if cfg!(feature = "http2") {
-        cfg.define("USE_NGHTTP2", None)
-            .define("NGHTTP2_STATICLIB", None);
-
-        if let Some(path) = env::var_os("DEP_NGHTTP2_ROOT") {
-            let path = PathBuf::from(path);
-            cfg.include(path.join("include"));
-        }
-    }
-
     if let Some(path) = env::var_os("DEP_Z_INCLUDE") {
         cfg.include(path);
-    }
-
-    if cfg!(feature = "spnego") {
-        cfg.define("USE_SPNEGO", None)
-            .file("curl/lib/http_negotiate.c")
-            .file("curl/lib/vauth/vauth.c");
     }
 
     if windows {
@@ -200,19 +162,13 @@ fn main() {
             .define("USE_WINSOCK", None)
             .file("curl/lib/system_win32.c");
 
-        if cfg!(feature = "ssl") {
-            cfg.define("USE_WINDOWS_SSPI", None)
-                .define("USE_SCHANNEL", None)
-                .file("curl/lib/x509asn1.c")
-                .file("curl/lib/curl_sspi.c")
-                .file("curl/lib/socks_sspi.c")
-                .file("curl/lib/vtls/schannel.c")
-                .file("curl/lib/vtls/schannel_verify.c");
-        }
-
-        if cfg!(feature = "spnego") {
-            cfg.file("curl/lib/vauth/spnego_sspi.c");
-        }
+		cfg.define("USE_WINDOWS_SSPI", None)
+			.define("USE_SCHANNEL", None)
+			.file("curl/lib/x509asn1.c")
+			.file("curl/lib/curl_sspi.c")
+			.file("curl/lib/socks_sspi.c")
+			.file("curl/lib/vtls/schannel.c")
+			.file("curl/lib/vtls/schannel_verify.c");
     } else {
         cfg.define("RECV_TYPE_ARG1", "int")
             .define("HAVE_PTHREAD_H", None)
@@ -248,37 +204,24 @@ fn main() {
             .define("SIZEOF_INT", "4")
             .define("SIZEOF_SHORT", "2");
 
-        if cfg!(feature = "ssl") {
-            if target.contains("-apple-") {
-                cfg.define("USE_DARWINSSL", None)
-                    .file("curl/lib/vtls/darwinssl.c");
-                if xcode_major_version().map_or(true, |v| v >= 9) {
-                    // On earlier Xcode versions (<9), defining HAVE_BUILTIN_AVAILABLE
-                    // would cause __bultin_available() to fail to compile due to
-                    // unrecognized platform names, so we try to check for Xcode
-                    // version first (if unknown, assume it's recent, as in >= 9).
-                    cfg.define("HAVE_BUILTIN_AVAILABLE", "1");
-                }
-            } else {
-                cfg.define("USE_OPENSSL", None)
-                    .file("curl/lib/vtls/openssl.c");
+		if target.contains("-apple-") {
+			cfg.define("USE_DARWINSSL", None)
+				.file("curl/lib/vtls/darwinssl.c");
+			if xcode_major_version().map_or(true, |v| v >= 9) {
+				// On earlier Xcode versions (<9), defining HAVE_BUILTIN_AVAILABLE
+				// would cause __bultin_available() to fail to compile due to
+				// unrecognized platform names, so we try to check for Xcode
+				// version first (if unknown, assume it's recent, as in >= 9).
+				cfg.define("HAVE_BUILTIN_AVAILABLE", "1");
+			}
+		} else {
+			cfg.define("USE_OPENSSL", None)
+				.file("curl/lib/vtls/openssl.c");
 
-                if let Some(path) = env::var_os("DEP_OPENSSL_INCLUDE") {
-                    cfg.include(path);
-                }
-            }
-        }
-
-        if cfg!(feature = "spnego") {
-            cfg.define("HAVE_GSSAPI", None)
-                .file("curl/lib/curl_gssapi.c")
-                .file("curl/lib/socks_gssapi.c")
-                .file("curl/lib/vauth/spnego_gssapi.c");
-
-            // Link against the MIT gssapi library. It might be desirable to add support for
-            // choosing between MIT and Heimdal libraries in the future.
-            println!("cargo:rustc-link-lib=gssapi_krb5");
-        }
+			if let Some(path) = env::var_os("DEP_OPENSSL_INCLUDE") {
+				cfg.include(path);
+			}
+		}
 
         let width = env::var("CARGO_CFG_TARGET_POINTER_WIDTH")
             .unwrap()
@@ -307,11 +250,6 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=Security");
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
     }
-}
-
-#[cfg(not(target_env = "msvc"))]
-fn try_vcpkg() -> bool {
-    false
 }
 
 #[cfg(target_env = "msvc")]
@@ -361,35 +299,6 @@ fn try_vcpkg() -> bool {
     false
 }
 
-fn try_pkg_config() -> bool {
-    let mut cfg = pkg_config::Config::new();
-    cfg.cargo_metadata(false);
-    let lib = match cfg.probe("libcurl") {
-        Ok(lib) => lib,
-        Err(e) => {
-            println!("Couldn't find libcurl from pkgconfig ({:?}), \
-                      compiling it from source...", e);
-            return false
-        }
-    };
-
-    // Not all system builds of libcurl have http2 features enabled, so if we've
-    // got a http2-requested build then we may fall back to a build from source.
-    if cfg!(feature = "http2") && !curl_config_reports_http2() {
-        return false
-    }
-
-    // Re-find the library to print cargo's metadata, then print some extra
-    // metadata as well.
-    cfg.cargo_metadata(true)
-        .probe("libcurl")
-        .unwrap();
-    for path in lib.include_paths.iter() {
-        println!("cargo:include={}", path.display());
-    }
-    return true
-}
-
 fn xcode_major_version() -> Option<u8> {
     let output = Command::new("xcodebuild")
         .arg("-version")
@@ -407,27 +316,3 @@ fn xcode_major_version() -> Option<u8> {
     None
 }
 
-fn curl_config_reports_http2() -> bool {
-    let output = Command::new("curl-config")
-        .arg("--features")
-        .output();
-    let output = match output {
-        Ok(out) => out,
-        Err(e) => {
-            println!("failed to run curl-config ({}), building from source", e);
-            return false
-        }
-    };
-    if !output.status.success() {
-        println!("curl-config failed: {}", output.status);
-        return false
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if !stdout.contains("HTTP2") {
-        println!("failed to find http-2 feature enabled in pkg-config-found \
-                  libcurl, building from source");
-        return false
-    }
-
-    return true
-}
