@@ -38,7 +38,6 @@ fn main() {
     fs::copy("curl/include/curl/multi.h", include.join("curl/multi.h")).unwrap();
     fs::copy("curl/include/curl/stdcheaders.h", include.join("curl/stdcheaders.h")).unwrap();
     fs::copy("curl/include/curl/system.h", include.join("curl/system.h")).unwrap();
-    fs::copy("curl/include/curl/urlapi.h", include.join("curl/urlapi.h")).unwrap();
     fs::copy("curl/include/curl/typecheck-gcc.h", include.join("curl/typecheck-gcc.h")).unwrap();
 
     let pkgconfig = dst.join("lib/pkgconfig");
@@ -96,7 +95,6 @@ fn main() {
         .file("curl/lib/curl_range.c")
         .file("curl/lib/curl_threads.c")
         .file("curl/lib/dotdot.c")
-        .file("curl/lib/doh.c")
         .file("curl/lib/easy.c")
         .file("curl/lib/escape.c")
         .file("curl/lib/file.c")
@@ -142,7 +140,6 @@ fn main() {
         .file("curl/lib/timeval.c")
         .file("curl/lib/transfer.c")
         .file("curl/lib/url.c")
-        .file("curl/lib/urlapi.c")
         .file("curl/lib/version.c")
         .file("curl/lib/vtls/vtls.c")
         .file("curl/lib/warnless.c")
@@ -207,13 +204,7 @@ fn main() {
 		if target.contains("-apple-") {
 			cfg.define("USE_DARWINSSL", None)
 				.file("curl/lib/vtls/darwinssl.c");
-			if xcode_major_version().map_or(true, |v| v >= 9) {
-				// On earlier Xcode versions (<9), defining HAVE_BUILTIN_AVAILABLE
-				// would cause __bultin_available() to fail to compile due to
-				// unrecognized platform names, so we try to check for Xcode
-				// version first (if unknown, assume it's recent, as in >= 9).
-				cfg.define("HAVE_BUILTIN_AVAILABLE", "1");
-			}
+            cfg.define("HAVE_BUILTIN_AVAILABLE", "1");
 		} else {
 			cfg.define("USE_OPENSSL", None)
 				.file("curl/lib/vtls/openssl.c");
@@ -298,21 +289,3 @@ fn try_vcpkg() -> bool {
     }
     false
 }
-
-fn xcode_major_version() -> Option<u8> {
-    let output = Command::new("xcodebuild")
-        .arg("-version")
-        .output()
-        .ok()?;
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut words = stdout.split_whitespace();
-        if words.next()? == "Xcode" {
-            let version = words.next()?;
-            return version[..version.find('.')?].parse().ok()
-        }
-    }
-    println!("unable to determine Xcode version, assuming >= 9");
-    None
-}
-
